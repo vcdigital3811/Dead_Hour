@@ -31,6 +31,9 @@ input{background:#111;color:#fff;border:1px solid #555}
 <div id="ov"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
+(function(){const u=['https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js','https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js','https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js'];let i=0;(function n(){if(window.Peer||i>=u.length)return;const s=document.createElement('script');s.src=u[i++];s.onerror=n;document.head.appendChild(s)})()})();
+</script>
+<script>
 const $=id=>document.getElementById(id);
 const WP=[
 {n:'M1911 Pistol',p:0,d:34,r:.28,mag:12,res:72,pel:1,sp:.008,rl:1.2,l:.35,auto:0},
@@ -143,9 +146,32 @@ const je=e=>{for(const t of e.changedTouches)if(t.identifier==jt){jt=null;JX=JY=
 lz.addEventListener('touchstart',e=>{e.preventDefault();const t=e.changedTouches[0];lt=t.identifier;lx=t.clientX;ly=t.clientY},po);
 lz.addEventListener('touchmove',e=>{e.preventDefault();for(const t of e.changedTouches)if(t.identifier==lt){yaw-=(t.clientX-lx)*.006;pit=Math.max(-1.4,Math.min(1.4,pit-(t.clientY-ly)*.006));lx=t.clientX;ly=t.clientY}},po);
 lz.addEventListener('touchend',()=>lt=null);
-// multiplayer (co-op, host-authoritative, via room presence)
+// multiplayer (co-op, host-authoritative, via PeerJS/WebRTC)
 const NET={on:0,host:0,room:null,zid:0,kp:{},last:{},dm:{},zmap:{},pm:{},err:'',code:'',n:'',lk:0,hu:0,nh:0,q:0,t:0};
-let RM=null;(async()=>{try{if(window.claude)RM=await claude.use('room')}catch(e){}})();
+// PeerJS room shim: star topology, host relays everyone's presence
+function mkRoom(code,host){return new Promise((resolve,reject)=>{
+const hid='deadhour-'+code.toLowerCase(),pr=host?new Peer(hid):new Peer();
+const conns={},st={},cbs=[];let mine={},myId=null,hc=null,ctr=0,done=0;
+const bc=(m,except)=>{for(const k in conns)if(k!=except&&conns[k].open)conns[k].send(m)};
+const room={
+peers(){const a=[{peer:myId,sameTab:true,kind:'viewer',presence:mine,updatedAt:0}];for(const k in st)a.push({peer:k,sameTab:false,kind:'viewer',presence:st[k].p,updatedAt:st[k].t});return a},
+onPeers(f){cbs.push(f)},
+presence(o){mine=o;if(host)bc({t:'p',id:myId,p:o});else if(hc&&hc.open)hc.send({t:'p',p:o});return Promise.resolve()},
+leave(){try{pr.destroy()}catch(e){}}};
+const note=(j,l)=>cbs.forEach(f=>f({joined:j,left:l}));
+const fail=c=>{if(!done){done=1;try{pr.destroy()}catch(e){}reject({code:c})}};setTimeout(()=>fail('timeout'),10000);
+pr.on('error',e=>fail(e.type));
+pr.on('open',id=>{myId=id;
+if(host){done=1;resolve(room);
+pr.on('connection',c=>{c.on('open',()=>{conns[c.peer]=c;st[c.peer]={p:{},t:++ctr};note([c.peer],[])});
+c.on('data',m=>{if(m.t=='p'){st[c.peer]={p:m.p,t:++ctr};bc({t:'p',id:c.peer,p:m.p},c.peer)}});
+const gone=()=>{if(!conns[c.peer])return;delete conns[c.peer];delete st[c.peer];bc({t:'l',id:c.peer});note([],[c.peer])};
+c.on('close',gone);c.on('error',gone)})}
+else{hc=pr.connect(hid,{reliable:false});
+hc.on('open',()=>{done=1;resolve(room)});
+hc.on('data',m=>{if(m.t=='p'){const n=!st[m.id];st[m.id]={p:m.p,t:++ctr};if(n)note([m.id],[])}else if(m.t=='l'){delete st[m.id];note([],[m.id])}});
+hc.on('close',()=>{for(const k in st)delete st[k]});
+setTimeout(()=>fail('timeout'),8000)}})})}
 const others=()=>NET.on?NET.room.peers().filter(p=>!p.sameTab&&p.kind=='viewer'):[];
 const myPeer=()=>(NET.room.peers().find(p=>p.sameTab)||{}).peer;
 const r2=v=>Math.round(v*100)/100;
@@ -154,10 +180,12 @@ if(NET.on){const n=NET.room.peers().filter(p=>p.kind=='viewer').length;h+=`<div 
 else if(!S.wave)h+=`<div class="row"><span><b>Co-op Multiplayer</b><br><small>Host, then share the code</small></span><button onclick="mpStart(1)">Host game</button></div><div class="row"><input id="cd" maxlength="5" placeholder="CODE" style="width:110px;font:22px monospace;text-transform:uppercase;padding:6px"><button onclick="mpStart(0,$('cd').value)">Join with code</button></div>`;
 return h}
 async function mpStart(host,code){NET.err='';
-if(!RM){NET.err='Multiplayer needs this page opened inside claude.ai while signed in (invited players must be signed in too).';return shop('Armory')}
+if(!window.Peer){NET.err='Multiplayer library failed to load. Check your connection and reload.';return shop('Armory')}
 if(host)code=Array.from({length:5},()=>'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.random()*31|0]).join('');
 code=(code||'').trim().toUpperCase();if(!/^[A-Z0-9]{5}$/.test(code)){NET.err='Enter the 5-character room code.';return shop('Armory')}
-try{NET.room=await RM.join('dh-'+code.toLowerCase())}catch(e){NET.err='Could not join ('+((e&&e.code)||'error')+'). Try again.';return shop('Armory')}
+NET.err='Connecting…';shop('Armory');
+try{NET.room=await mkRoom(code,!!host)}catch(e){const c=(e&&e.code)||'error';NET.err=c=='timeout'?'Could not reach the multiplayer server (or the host). It may be blocked on your network — try another network or turn off VPN/ad blocker.':c=='peer-unavailable'?'No game found with that code.':'Could not connect ('+c+'). Try again.';return shop('Armory')}
+NET.err='';
 Object.assign(NET,{on:1,host:!!host,code,n:'Survivor '+(100+Math.random()*900|0),kp:{},last:{},dm:{},zmap:{},pm:{},lk:0,hu:0,nh:0,q:0,t:0});
 NET.room.onPeers(c=>{if((c.joined.length||c.left.length)&&S.state=='shop')shop('Armory')});netTick();shop('Armory')}
 function mpLeave(m){try{NET.room&&NET.room.leave()}catch(e){}NET.on=0;NET.host=0;NET.room=null;for(const z of Z.concat(Z.dead||[]))sc.remove(z);Z.length=0;zm.length=0;Z.dead=[];for(const id in NET.pm)sc.remove(NET.pm[id]);NET.pm={};NET.zmap={};NET.dm={};S.queue=0;S.wave=0;shop(m||'Armory')}
