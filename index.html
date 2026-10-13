@@ -31,6 +31,7 @@ input{background:#111;color:#fff;border:1px solid #555}
 <div id="bf" class="tb" style="right:24px;bottom:30px;width:100px;height:100px;font-size:18px">FIRE</div><div id="br" class="tb" style="right:140px;bottom:24px">RELOAD</div><div id="bs" class="tb" style="right:24px;bottom:150px">RUN</div><div id="bz" class="tb" style="right:24px;bottom:250px;font-size:26px">⚡</div><div id="bm" class="tb" style="right:140px;bottom:196px">MAP</div><div id="bw" class="tb" style="right:140px;bottom:110px">SWAP</div></div>
 <div id="ov"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 const $=id=>document.getElementById(id);
 const WP=[
@@ -164,7 +165,21 @@ shop('🎁 Chest: '+m)};
 tb('bz',()=>useBlast());
 // multiplayer (co-op, host-authoritative, via room presence)
 const NET={on:0,host:0,room:null,zid:0,kp:{},kx:{},lx:0,last:{},dm:{},zmap:{},pm:{},err:'',code:'',n:'',lk:0,hu:0,nh:0,q:0,t:0};
-let RM=null;(async()=>{try{if(window.claude)RM=await claude.use('room')}catch(e){}})();
+// PeerJS transport: host-authoritative star network exposing the same small room API the game uses
+function peerJoin(code,host){return new Promise((res,rej)=>{
+const id='deadhour-'+code.toLowerCase(),P=new Peer(host?id:undefined),st={},mine={},conns={},cbs=[];let myId=null,stamp=0,conn=null,done=0;
+const fire=(j,l)=>cbs.forEach(f=>f({joined:j,left:l})),fail=e=>{if(!done){done=1;try{P.destroy()}catch(x){}rej({code:(e&&e.type)||'error'})}};
+const bc=()=>{const all={};all[myId]=mine;for(const k in st)all[k]=st[k].p;for(const k in conns)if(conns[k].open)conns[k].send({all})};
+const room={peers(){const a=[{peer:myId,sameTab:true,kind:'viewer',presence:mine,updatedAt:stamp}];for(const k in st)a.push({peer:k,sameTab:false,kind:'viewer',presence:st[k].p,updatedAt:st[k].t});return a},
+presence(o){Object.assign(mine,o);if(host)bc();else if(conn&&conn.open)conn.send({p:mine});return Promise.resolve()},
+onPeers(f){cbs.push(f)},leave(){try{P.destroy()}catch(e){}}};
+P.on('error',fail);setTimeout(()=>fail({type:'timeout'}),9000);
+P.on('open',pid=>{myId=pid;
+if(host){done=1;res(room);P.on('connection',c=>{conns[c.peer]=c;c.on('data',m=>{if(m&&m.p){if(!st[c.peer])fire([c.peer],[]);st[c.peer]={p:m.p,t:++stamp}}});c.on('close',()=>{delete conns[c.peer];delete st[c.peer];fire([],[c.peer])})})}
+else{conn=P.connect(id,{reliable:true});conn.on('open',()=>{done=1;res(room);conn.send({p:mine})});
+conn.on('data',m=>{if(m&&m.all){for(const k in m.all){if(k==myId)continue;const n=!st[k];st[k]={p:m.all[k],t:++stamp};if(n)fire([k],[])}for(const k in st)if(!(k in m.all)){delete st[k];fire([],[k])}}});
+conn.on('close',()=>{const l=Object.keys(st);for(const k of l)delete st[k];fire([],l)})}})})}
+const RM=window.Peer?{join:peerJoin}:null;
 const others=()=>NET.on?NET.room.peers().filter(p=>!p.sameTab&&p.kind=='viewer'):[];
 const myPeer=()=>(NET.room.peers().find(p=>p.sameTab)||{}).peer;
 const r2=v=>Math.round(v*100)/100;
@@ -173,10 +188,10 @@ if(NET.on){const n=NET.room.peers().filter(p=>p.kind=='viewer').length;h+=`<div 
 else if(!S.wave)h+=`<div class="row"><span><b>Co-op Multiplayer</b><br><small>Host, then share the code</small></span><button onclick="mpStart(1)">Host game</button></div><div class="row"><input id="cd" maxlength="5" placeholder="CODE" style="width:110px;font:22px monospace;text-transform:uppercase;padding:6px"><button onclick="mpStart(0,$('cd').value)">Join with code</button></div>`;
 return h}
 async function mpStart(host,code){NET.err='';
-if(!RM){NET.err='Multiplayer needs this page opened inside claude.ai while signed in (invited players must be signed in too).';return shop('Armory')}
+if(!RM){NET.err='PeerJS failed to load. Check your internet connection.';return shop('Armory')}
 if(host)code=Array.from({length:5},()=>'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.random()*31|0]).join('');
 code=(code||'').trim().toUpperCase();if(!/^[A-Z0-9]{5}$/.test(code)){NET.err='Enter the 5-character room code.';return shop('Armory')}
-try{NET.room=await RM.join('dh-'+code.toLowerCase())}catch(e){NET.err='Could not join ('+((e&&e.code)||'error')+'). Try again.';return shop('Armory')}
+try{NET.room=await RM.join(code,host)}catch(e){NET.err='Could not join ('+((e&&e.code)||'error')+'). Try again.';return shop('Armory')}
 Object.assign(NET,{on:1,host:!!host,code,n:'Survivor '+(100+Math.random()*900|0),kp:{},kx:{},lx:0,last:{},dm:{},zmap:{},pm:{},lk:0,hu:0,nh:0,q:0,t:0});
 NET.room.onPeers(c=>{if((c.joined.length||c.left.length)&&S.state=='shop')shop('Armory')});netTick();shop('Armory')}
 function mpLeave(m){try{NET.room&&NET.room.leave()}catch(e){}NET.on=0;NET.host=0;NET.room=null;for(const z of Z.concat(Z.dead||[]))sc.remove(z);Z.length=0;zm.length=0;Z.dead=[];for(const id in NET.pm)sc.remove(NET.pm[id]);NET.pm={};NET.zmap={};NET.dm={};S.queue=0;S.wave=0;shop(m||'Armory')}
